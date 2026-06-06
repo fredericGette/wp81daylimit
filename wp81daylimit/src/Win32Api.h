@@ -40,7 +40,7 @@ class Win32Api {
 private:
 	// Returns a base address of KernelBase.dll
 	static HMODULE GetKernelBase() {
-		return GetBaseAddress(&::DisableThreadLibraryCalls);
+		return GetBaseAddress(reinterpret_cast<void*>(&::DisableThreadLibraryCalls));
 	}
 
 	// Returns a base address of the given address
