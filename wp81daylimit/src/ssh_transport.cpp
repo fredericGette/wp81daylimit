@@ -76,6 +76,9 @@ int ssh_tcp_connect(const char *host, uint16_t port)
 		return -1;
 	}
 
+	const DWORD deadline = GetTickCount() + 10000;  /* 10 s retry window */
+	const DWORD retry_delay_ms = 500;
+
 	SOCKET fd = INVALID_SOCKET;
 	struct addrinfo *p;
 	for (p = res; p != NULL; p = p->ai_next) {
@@ -94,8 +97,6 @@ int ssh_tcp_connect(const char *host, uint16_t port)
 		return -1;
 	}
 
-	/* Cast SOCKET (UINT_PTR) to int — safe for passing around as fd
-	on 64-bit Windows as long as we cast back before Winsock calls. */
 	return (int)(intptr_t)fd;
 }
 

@@ -1,5 +1,10 @@
 // wp81dailylimit.cpp : Defines the entry point for the console application.
 //
+// Context: 
+// win32 console application, 
+// linked with Msvcr110.dll, 
+// architecture ARM 32bit little endian. 
+// Use secure functions when possible (example _snprintf_s instead of _snprintf)
 
 #include "stdafx.h"
 
