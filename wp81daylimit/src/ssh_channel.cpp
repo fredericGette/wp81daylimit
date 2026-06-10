@@ -21,7 +21,6 @@
 #include "ssh_channel.h"
 #include "ssh_transport.h"
 #include "Win32Api.h"
-#include "EtwLogger.h"
 
 static Win32Api api_ssh_channel;
 
@@ -394,7 +393,7 @@ int ssh_exec_loop(SshSession *s, const char *cmd, uint8_t **out_buf, size_t *out
 					if (boff + 4 <= pkt_len) {
 						uint32_t exit_code = buf_get_u32(recv_buf + boff);
 						if (exit_code != 0) {
-							EtwLogger::LogEvent(TRACE_LEVEL_WARNING, L"Remote commande, exit code: %u", exit_code);
+							fprintf(stderr, "Remote commande, exit code: %u", exit_code);
 						}
 					}
 				}

@@ -10,13 +10,13 @@ A Windows Phone 8.1 console utility that enforces a **daily screen-time limit** 
 
 `wp81daylimit` runs on a Windows Phone 8.1 device and communicates with a remote Windows machine via a hand-rolled SSH client (no libssh2 dependency). It:
 
-1. Connects to the remote host over TCP and performs a full SSH handshake (banner exchange, key exchange, password authentication).
-2. Opens an SSH channel and runs a PowerShell one-liner to enumerate logged-in users by inspecting running `explorer.exe` processes.
-3. Checks whether a specific target user (`-t`) is currently logged in.
-4. Queries a time-slot counter to determine how many 5-minute slots the user has been connected today.
-5. If the cumulative connection time reaches or exceeds the configured limit, it logs a violation event and can trigger a remote shutdown.
-
-All activity is recorded through **ETW (Event Tracing for Windows)** using a custom logger.
+1. Checks whether the phone screen is locked and requests an unlock via the WinRT `Windows.Phone.System.SystemProtection` API. On Windows Phone 8.1, the networking stack is deactivated when the screen is locked, so the screen must be unlocked before any network connection can be established.
+2. Connects to the remote host over TCP and performs a full SSH handshake (banner exchange, key exchange, password authentication). If the initial connect fails it retries for up to 10 seconds.
+3. Opens an SSH channel and runs a PowerShell one-liner to enumerate logged-in users by inspecting running `explorer.exe` processes.
+4. Checks whether a specific target user (`-t`) is currently logged in.
+5. Appends a timestamped `0`/`1` entry to a daily log file, and deletes log files from previous days.
+6. Counts the number of distinct 5-minute slots during which the user was logged in today.
+7. If the cumulative connection time reaches or exceeds the configured limit (72 slots = 6 hours), it prints a warning.
 
 ---
 
@@ -49,19 +49,21 @@ wp81daylimit -p 2222 -w s3cr3t -t alice -u alice 192.168.1.10
 
 ---
 
-## ETW Logging
+## Logging
 
-The service registers an ETW provider with GUID:
+Activity is recorded to daily plain-text log files stored on the phone at:
 
 ```
-{14cbde36-bfed-4c49-8319-db0679011d86}
+D:\Documents\wp81dailylimit\YYYY-MM-DD.log
 ```
 
-Capture a real-time trace with [wp81debug](https://github.com/fredericGette/wp81debug):
+Each line contains a timestamp and a boolean flag:
 
-```bat
-wp81debug etw {14cbde36-bfed-4c49-8319-db0679011d86}
 ```
+HH:MM  <0|1>
+```
+
+`1` means the target user was found logged in at that time; `0` means they were not. Log files from previous days are deleted automatically on each run.
 
 ---
 
@@ -71,4 +73,3 @@ wp81debug etw {14cbde36-bfed-4c49-8319-db0679011d86}
 - Manually copy the executable from the root of this GitHub repository to the shared folder of the phone.
 > [!NOTE]
 > When you connect your phone with a USB cable, this folder is visible in the Explorer of your computer. And in the phone, this folder is mounted in `C:\Data\USERS\Public\Documents`
-

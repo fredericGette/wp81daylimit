@@ -28,14 +28,133 @@
 #include "ssh_channel.h"
 #include "log_file.h"
 #include "Win32Api.h"
-#include "EtwLogger.h"
 
-static const GUID kProviderGuid = { /* 14cbde36-bfed-4c49-8319-db0679011d86 */
-	0x14cbde36,
-	0xbfed,
-	0x4c49,
-	{ 0x83, 0x19, 0xdb, 0x06, 0x79, 0x01, 0x1d, 0x86 }
+#include <roapi.h>
+#include <winstring.h>
+#include <wrl/client.h>   // Microsoft::WRL::ComPtr
+
+// ── ABI GUIDs from Windows_Phone_System.idl ────────────────────────────────
+// {49C36560-97E1-4D99-8BFB-BEFEAA6ACE6D}  ISystemProtectionStatics
+static const IID IID_ISystemProtectionStatics = {
+    0x49C36560, 0x97E1, 0x4D99,
+    { 0x8B, 0xFB, 0xBE, 0xFE, 0xAA, 0x6A, 0xCE, 0x6D }
 };
+// {0692FA3F-8F11-4C4B-AA0D-87D7AF7B1779}  ISystemProtectionUnlockStatics
+static const IID IID_ISystemProtectionUnlockStatics = {
+    0x0692FA3F, 0x8F11, 0x4C4B,
+    { 0xAA, 0x0D, 0x87, 0xD7, 0xAF, 0x7B, 0x17, 0x79 }
+};
+
+// ── Minimal vtable-only interface declarations ──────────────────────────────
+// (avoids dependency on the generated WinRT header for these phone-specific
+//  interfaces, which may not ship in the WP8.1 SDK include path)
+
+MIDL_INTERFACE("49C36560-97E1-4D99-8BFB-BEFEAA6ACE6D")
+ISystemProtectionStatics : public IInspectable
+{
+    virtual HRESULT STDMETHODCALLTYPE get_ScreenLocked(boolean *value) = 0;
+};
+
+MIDL_INTERFACE("0692FA3F-8F11-4C4B-AA0D-87D7AF7B1779")
+ISystemProtectionUnlockStatics : public IInspectable
+{
+    virtual HRESULT STDMETHODCALLTYPE RequestScreenUnlock() = 0;
+};
+
+// ── Helper ──────────────────────────────────────────────────────────────────
+// Returns:
+//   0  – screen was not locked (or lock-state could not be determined)
+//   1  – screen was locked; RequestScreenUnlock() was called
+//  -1  – hard error (RoInitialize / activation failed)
+static int check_and_unlock_screen(void)
+{
+    HRESULT hr;
+
+    hr = RoInitialize(RO_INIT_MULTITHREADED);
+    if (FAILED(hr) && hr != S_FALSE && hr != 0x80010106) {
+        fprintf(stderr, "[screen] RoInitialize failed: 0x%08X\n", (unsigned)hr);
+        return -1;
+    }
+
+    static const wchar_t kClassName[] =
+        L"Windows.Phone.System.SystemProtection";
+
+    HSTRING hClassName = NULL;
+    hr = WindowsCreateString(kClassName,
+                             (UINT32)(sizeof(kClassName) / sizeof(wchar_t) - 1),
+                             &hClassName);
+    if (FAILED(hr)) {
+        fprintf(stderr, "[screen] WindowsCreateString failed: 0x%08X\n", (unsigned)hr);
+        RoUninitialize();
+        return -1;
+    }
+
+    // ── Nested scope: all ComPtrs destroyed here, before RoUninitialize ────
+    int result = 0;
+    {
+        Microsoft::WRL::ComPtr<ISystemProtectionStatics> pStatics;
+		Microsoft::WRL::ComPtr<ISystemProtectionUnlockStatics> pUnlockStatics;
+		boolean locked = false;
+		DWORD deadline;
+
+        hr = RoGetActivationFactory(hClassName,
+                                    IID_ISystemProtectionStatics,
+                                    (void **)pStatics.GetAddressOf());
+        if (FAILED(hr)) {
+            fprintf(stderr, "[screen] RoGetActivationFactory(ISystemProtectionStatics)"
+                            " failed: 0x%08X\n", (unsigned)hr);
+            result = -1;
+            goto cleanup;
+        }
+
+        hr = pStatics->get_ScreenLocked(&locked);
+        if (FAILED(hr)) {
+            fprintf(stderr, "[screen] get_ScreenLocked failed: 0x%08X\n", (unsigned)hr);
+            result = -1;
+            goto cleanup;
+        }
+
+        if (!locked) {
+            fprintf(stderr, "[screen] screen is not locked\n");
+            goto cleanup;
+        }
+
+        fprintf(stderr, "[screen] screen is locked - requesting unlock\n");
+
+        hr = RoGetActivationFactory(hClassName,
+                                    IID_ISystemProtectionUnlockStatics,
+                                    (void **)pUnlockStatics.GetAddressOf());
+        if (FAILED(hr)) {
+            fprintf(stderr, "[screen] RoGetActivationFactory(ISystemProtectionUnlockStatics)"
+                            " failed: 0x%08X\n", (unsigned)hr);
+            result = -1;
+            goto cleanup;
+        }
+
+		deadline = GetTickCount() + 5000;
+		do {
+			hr = pUnlockStatics->RequestScreenUnlock();
+			if (SUCCEEDED(hr)) break;
+			if (hr != HRESULT_FROM_WIN32(EPT_S_NOT_REGISTERED)) break; /* non-transient */
+			Sleep(200);
+		} while (GetTickCount() < deadline);
+
+		if (FAILED(hr)) {
+			fprintf(stderr, "[screen] RequestScreenUnlock failed: 0x%08X\n", (unsigned)hr);
+		 	result = -1;
+        } else {
+            result = 1;
+        }
+
+    cleanup:;
+        // pStatics and pUnlockStatics Release() here, inside the WinRT apartment
+    }
+    // ── ComPtrs are gone; now safe to tear down the apartment ──────────────
+
+    WindowsDeleteString(hClassName);
+    RoUninitialize();
+    return result;
+}
 
 static int read_password(const char *prompt, char *buf, size_t buf_size)
 {
@@ -79,8 +198,6 @@ int main(int argc, char *argv[])
 	SshSession  s;
 	int         i;
 
-	EtwLogger::Init(kProviderGuid);
-
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
 			long p = strtol(argv[++i], NULL, 10);
@@ -118,6 +235,12 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
+	// ── Screen-unlock check ──────────────────────────────────────────
+    check_and_unlock_screen();
+    // We proceed regardless of the return value: the SSH session is useful
+    // even when unlock fails (e.g. wrong apartment, locked by policy, etc.).
+    // 
+
 	memset(password, 0, sizeof(password));
 	if (opt_password) {
 		_snprintf_s(password, sizeof(password), _TRUNCATE, "%s", opt_password);
@@ -127,7 +250,6 @@ int main(int argc, char *argv[])
 		_snprintf_s(prompt, sizeof(prompt), _TRUNCATE, "%s@%s's password: ", opt_user, opt_host);
 		if (read_password(prompt, password, sizeof(password)) != 0) {
 			fprintf(stderr, "[main] failed to read password\n");
-			EtwLogger::Cleanup();
 			return 1;
 		}
 	}
@@ -135,30 +257,26 @@ int main(int argc, char *argv[])
 	memset(&s, 0, sizeof(s));
 	s.fd = ssh_tcp_connect(opt_host, opt_port);
 	if (s.fd < 0) {
-		fprintf(stderr, "[main] TCP connect failed\n");
-		EtwLogger::LogEvent(TRACE_LEVEL_FATAL, L"TCP connect failed : %S:%d", opt_host, opt_port);
+		fprintf(stderr, "[main] TCP connect failed : %s:%d\n", opt_host, opt_port);
+
 		return 1;
 	}
 	if (ssh_banner_exchange(&s) != 0) {
 		fprintf(stderr, "[main] banner failed\n");
-		EtwLogger::LogEvent(TRACE_LEVEL_FATAL, L"SSH banner failed");
 		goto fail;
 	}
 	if (ssh_kex(&s) != 0) {
 		fprintf(stderr, "[main] kex failed\n");
-		EtwLogger::LogEvent(TRACE_LEVEL_FATAL, L"SSH kex failed");
 		goto fail;
 	}
 	if (ssh_userauth_password(&s, opt_user, password) != 0) {
-		fprintf(stderr, "[main] auth failed\n");
-		EtwLogger::LogEvent(TRACE_LEVEL_FATAL, L"Password auth failed");
+		fprintf(stderr, "[main] password auth failed\n");
 		goto fail;
 	}
 	SecureZeroMemory(password, sizeof(password));
 
 	if (ssh_open_channel(&s) != 0) {
 		fprintf(stderr, "[main] channel failed\n");
-		EtwLogger::LogEvent(TRACE_LEVEL_FATAL, L"SSH open channel failed");
 		goto fail;
 	}
 
@@ -171,8 +289,7 @@ int main(int argc, char *argv[])
 		size_t   out_len = 0;
 
 		if (ssh_exec_loop(&s, cmd, &out_buf, &out_len) != 0) {
-			fprintf(stderr, "exec failed\n");
-			EtwLogger::LogEvent(TRACE_LEVEL_ERROR, L"SSH exec command failed.");
+			fprintf(stderr, "exec command failed\n");
 		}
 
 		check_logged_user(opt_target_user, out_buf, &out_len);
@@ -180,17 +297,15 @@ int main(int argc, char *argv[])
 	}
 
 	if (count_true_slots(5) >= 72) {
-		EtwLogger::LogEvent(TRACE_LEVEL_INFORMATION, L"User %S connected at least during %d hours.", opt_target_user, 5 * 72 / 60);
+		printf("User %s connected at least during %d hours.\n", opt_target_user, 5 * 72 / 60);
 	}
 
 	if (s.fd >= 0) ssh_disconnect(&s, "session ended");
-	EtwLogger::Cleanup();
 	return 0;
 
 fail:
 	SecureZeroMemory(password, sizeof(password));
 	if (s.fd >= 0) ssh_disconnect(&s, "fatal error");
-	EtwLogger::Cleanup();
 	return 1;
 }
 

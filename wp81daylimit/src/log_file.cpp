@@ -5,7 +5,6 @@
 
 #include "log_file.h"
 #include "Win32Api.h"
-#include "EtwLogger.h"
 
 /* -----------------------------------------------------------------------
 * Configuration
@@ -143,7 +142,7 @@ BOOL check_logged_user(const char *target, uint8_t *out_buf, size_t *out_len)
 	SYSTEMTIME st;
 	char log_path[MAX_PATH];
 
-	/* 1. Get current local time once — use the same snapshot throughout */
+	/* 1. Get current local time once ï¿½ use the same snapshot throughout */
 	GetLocalTime(&st);
 
 	/* 2. Build today's filename stem */
@@ -158,7 +157,7 @@ BOOL check_logged_user(const char *target, uint8_t *out_buf, size_t *out_len)
 	if (*out_len > 0)
 	{
 		/* Skip the header line ("UserName","Id"), then parse data rows */
-		char *context = NULL;                      /* strtok_s state — must be NULL on first call */
+		char *context = NULL;                      /* strtok_s state ï¿½ must be NULL on first call */
 		char *line = strtok_s((char *)out_buf, "\n", &context);
 		int   header_skipped = 0;
 
@@ -181,7 +180,7 @@ BOOL check_logged_user(const char *target, uint8_t *out_buf, size_t *out_len)
 
 				/* Strip the surrounding quotes and comma: "USER","PID" */
 				if (sscanf_s(line, "\"%63[^\"]\",%*[\"]%d", username, (unsigned)sizeof(username), &pid) == 2) {
-					EtwLogger::LogEvent(TRACE_LEVEL_VERBOSE, L"Found target user (UserName,PID) : (%S,%d)", username, pid);
+					printf("Found target user (UserName,PID) : (%s,%d)\n", username, pid);
 					found = TRUE;
 				}
 			}
@@ -191,7 +190,7 @@ BOOL check_logged_user(const char *target, uint8_t *out_buf, size_t *out_len)
 
 	if (!found)
 	{
-		EtwLogger::LogEvent(TRACE_LEVEL_VERBOSE, L"Target user not found in output.");
+		printf("Target user not found in output.");
 	}
 
 
