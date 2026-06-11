@@ -427,11 +427,13 @@ send_close:
 	s->channel_open = 0;
 	}
 
+	{ u_long nb = 0; ioctlsocket(sock, FIONBIO, &nb); }
 	WSAEventSelect(sock, sock_event, 0);
 	WSACloseEvent(sock_event);
 	return 0;
 
 done_err:
+	{ u_long nb = 0; ioctlsocket(sock, FIONBIO, &nb); }
 	WSAEventSelect(sock, sock_event, 0);
 	WSACloseEvent(sock_event);
 	return -1;

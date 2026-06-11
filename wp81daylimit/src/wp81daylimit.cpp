@@ -119,7 +119,7 @@ static int check_and_unlock_screen(void)
             goto cleanup;
         }
 
-        fprintf(stderr, "[screen] screen is locked - requesting unlock\n");
+        printf("[screen] screen is locked - requesting unlock\n");
 
         hr = RoGetActivationFactory(hClassName,
                                     IID_ISystemProtectionUnlockStatics,
@@ -197,6 +197,7 @@ int main(int argc, char *argv[])
 	char        password[256];
 	SshSession  s;
 	int         i;
+	int         count;
 
 	for (i = 1; i < argc; i++) {
 		if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
@@ -273,8 +274,6 @@ int main(int argc, char *argv[])
 		fprintf(stderr, "[main] password auth failed\n");
 		goto fail;
 	}
-	SecureZeroMemory(password, sizeof(password));
-
 	if (ssh_open_channel(&s) != 0) {
 		fprintf(stderr, "[main] channel failed\n");
 		goto fail;
@@ -296,10 +295,38 @@ int main(int argc, char *argv[])
 		free(out_buf);
 	}
 
-	if (count_true_slots(5) >= 72) {
-		printf("User %s connected at least during %d hours.\n", opt_target_user, 5 * 72 / 60);
+	count = count_true_slots(5);
+	printf("User %s connected for %d minutes.\n", opt_target_user, 5 * count);
+	if (count >= 72) {
+		printf("User %s connected at least during %d hours. Request shutdown...\n", opt_target_user, 5 * 72 / 60);
+
+		if (ssh_open_channel(&s) != 0) {
+			/* Server closed the connection after the first exec; reconnect */
+			fprintf(stderr, "[main] reconnecting for shutdown command\n");
+			if (s.fd >= 0) { ssh_disconnect(&s, "reconnecting"); }
+			memset(&s, 0, sizeof(s));
+			s.fd = ssh_tcp_connect(opt_host, opt_port);
+			if (s.fd < 0 ||
+				ssh_banner_exchange(&s) != 0 ||
+				ssh_kex(&s) != 0 ||
+				ssh_userauth_password(&s, opt_user, password) != 0 ||
+				ssh_open_channel(&s) != 0) {
+				fprintf(stderr, "[main] second channel failed\n");
+				goto fail;
+			}
+		}
+
+		const char *cmd = "shutdown /s /t 30 /c \"Maximum 6h d'ordi aujourd'hui\"";
+		uint8_t *out_buf = NULL;
+		size_t   out_len = 0;
+
+		if (ssh_exec_loop(&s, cmd, &out_buf, &out_len) != 0) {
+			fprintf(stderr, "exec command failed\n");
+		}
+		free(out_buf);
 	}
 
+	SecureZeroMemory(password, sizeof(password));
 	if (s.fd >= 0) ssh_disconnect(&s, "session ended");
 	return 0;
 

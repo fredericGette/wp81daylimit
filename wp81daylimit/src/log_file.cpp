@@ -190,7 +190,7 @@ BOOL check_logged_user(const char *target, uint8_t *out_buf, size_t *out_len)
 
 	if (!found)
 	{
-		printf("Target user not found in output.");
+		printf("Target user not found in output.\n");
 	}
 
 
