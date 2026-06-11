@@ -182,8 +182,11 @@ static int read_password(const char *prompt, char *buf, size_t buf_size)
 static void usage(const char *prog)
 {
 	fprintf(stderr,
-		"Usage: %s [-p port] [-w password] [-t target_user] [user@]host\n"
-		"       %s [-p port] [-w password] [-t target_user] -u user host\n",
+		"Usage: %s [-p port] [-w password] [-t target_user] [-m message] [-s slot_minute] [-x max_slots] [user@]host\n"
+		"       %s [-p port] [-w password] [-t target_user] [-m message] [-s slot_minute] [-x max_slots] -u user host\n"
+		"  -m message      shutdown message (optional; no /c flag when absent)\n"
+		"  -s slot_minute  slot size in minutes (default: 5)\n"
+		"  -x max_slots    max connection time in slots (default: 72)\n",
 		prog, prog);
 }
 
@@ -193,7 +196,10 @@ int main(int argc, char *argv[])
 	const char *opt_host = NULL;
 	const char *opt_password = NULL;
 	const char *opt_target_user = NULL;
+	const char *opt_message = NULL;
 	uint16_t    opt_port = 22;
+	int         opt_slot_minute = 5;
+	int         opt_max_slots = 72;
 	char        password[256];
 	SshSession  s;
 	int         i;
@@ -216,6 +222,25 @@ int main(int argc, char *argv[])
 		}
 		else if (strcmp(argv[i], "-t") == 0 && i + 1 < argc) {
 			opt_target_user = argv[++i];
+		}
+		else if (strcmp(argv[i], "-m") == 0 && i + 1 < argc) {
+			opt_message = argv[++i];
+		}
+		else if (strcmp(argv[i], "-s") == 0 && i + 1 < argc) {
+			long v = strtol(argv[++i], NULL, 10);
+			if (v < 1 || v > 60) {
+				fprintf(stderr, "Invalid slot_minute (1-60)\n");
+				return 1;
+			}
+			opt_slot_minute = (int)v;
+		}
+		else if (strcmp(argv[i], "-x") == 0 && i + 1 < argc) {
+			long v = strtol(argv[++i], NULL, 10);
+			if (v < 1) {
+				fprintf(stderr, "Invalid max_slots (must be >= 1)\n");
+				return 1;
+			}
+			opt_max_slots = (int)v;
 		}
 		else if (argv[i][0] != '-') {
 			char *at = strchr(argv[i], '@');
@@ -295,10 +320,10 @@ int main(int argc, char *argv[])
 		free(out_buf);
 	}
 
-	count = count_true_slots(5);
-	printf("User %s connected for %d minutes.\n", opt_target_user, 5 * count);
-	if (count >= 72) {
-		printf("User %s connected at least during %d hours. Request shutdown...\n", opt_target_user, 5 * 72 / 60);
+	count = count_true_slots(opt_slot_minute);
+	printf("User %s connected for %d minutes.\n", opt_target_user, opt_slot_minute * count);
+	if (count >= opt_max_slots) {
+		printf("User %s connected at least during %d minutes. Request shutdown...\n", opt_target_user, opt_slot_minute * opt_max_slots);
 
 		if (ssh_open_channel(&s) != 0) {
 			/* Server closed the connection after the first exec; reconnect */
@@ -316,7 +341,15 @@ int main(int argc, char *argv[])
 			}
 		}
 
-		const char *cmd = "shutdown /s /t 30 /c \"Maximum 6h d'ordi aujourd'hui\"";
+		char     shutdown_cmd[512];
+		if (opt_message) {
+			_snprintf_s(shutdown_cmd, sizeof(shutdown_cmd), _TRUNCATE,
+				"shutdown /s /t 30 /c \"%s\"", opt_message);
+		} else {
+			_snprintf_s(shutdown_cmd, sizeof(shutdown_cmd), _TRUNCATE,
+				"shutdown /s /t 30");
+		}
+		const char *cmd = shutdown_cmd;
 		uint8_t *out_buf = NULL;
 		size_t   out_len = 0;
 

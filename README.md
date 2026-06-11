@@ -16,15 +16,15 @@ A Windows Phone 8.1 console utility that enforces a **daily screen-time limit** 
 4. Checks whether a specific target user (`-t`) is currently logged in.
 5. Appends a timestamped `0`/`1` entry to a daily log file, and deletes log files from previous days.
 6. Counts the number of distinct 5-minute slots during which the user was logged in today.
-7. If the cumulative connection time reaches or exceeds the configured limit (72 slots = 6 hours), it prints a warning.
+7. If the cumulative connection time reaches or exceeds the configured limit (default: 72 slots × 5 min = 6 hours), it opens a second SSH channel and runs `shutdown /s /t 30` on the remote machine, optionally with a custom message (`/c`).
 
 ---
 
 ## Usage
 
 ```
-wp81daylimit [-p port] [-w password] [-t target_user] [user@]host
-wp81daylimit [-p port] [-w password] [-t target_user] -u user host
+wp81daylimit [-p port] [-w password] [-t target_user] [-m message] [-s slot_minute] [-x max_slots] [user@]host
+wp81daylimit [-p port] [-w password] [-t target_user] [-m message] [-s slot_minute] [-x max_slots] -u user host
 ```
 
 ### Options
@@ -35,6 +35,9 @@ wp81daylimit [-p port] [-w password] [-t target_user] -u user host
 | `-u <user>` | SSH username (alternative to `user@host` syntax) |
 | `-w <password>` | SSH password (if omitted, prompted interactively with echo disabled) |
 | `-t <target_user>` | **Required.** Windows username to monitor on the remote machine |
+| `-m <message>` | Shutdown message shown to the user (optional; omitting it skips the `/c` flag) |
+| `-s <slot_minute>` | Slot size in minutes (default: `5`) |
+| `-x <max_slots>` | Maximum number of slots before shutdown is triggered (default: `72`, i.e. 6 hours) |
 | `[user@]host` | Remote host, with optional inline username |
 
 ### Examples
@@ -43,8 +46,11 @@ wp81daylimit [-p port] [-w password] [-t target_user] -u user host
 # Prompt for password, monitor user "alice" on 192.168.1.10
 wp81daylimit -t alice alice@192.168.1.10
 
-# Non-default SSH port, password on command line
-wp81daylimit -p 2222 -w s3cr3t -t alice -u alice 192.168.1.10
+# Non-default SSH port, password on command line, custom limit of 4 hours (48 × 5 min slots)
+wp81daylimit -p 2222 -w s3cr3t -t alice -u alice -x 48 192.168.1.10
+
+# Same, with a shutdown message
+wp81daylimit -p 2222 -w s3cr3t -t alice -u alice -x 48 -m "Time's up!" 192.168.1.10
 ```
 
 ---
