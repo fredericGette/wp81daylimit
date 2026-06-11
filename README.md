@@ -27,6 +27,8 @@ wp81daylimit [-p port] [-w password] [-t target_user] [-m message] [-s slot_minu
 wp81daylimit [-p port] [-w password] [-t target_user] [-m message] [-s slot_minute] [-x max_slots] -u user host
 ```
 
+Can be run periodically (every 'slot_minute') with [wp81TimerService](https://github.com/fredericGette/wp81TimerService).
+
 ### Options
 
 | Flag | Description |
