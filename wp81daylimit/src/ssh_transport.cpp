@@ -76,15 +76,33 @@ int ssh_tcp_connect(const char *host, uint16_t port)
 		return -1;
 	}
 
+	const DWORD deadline = GetTickCount() + 10000;  /* 10 s retry window */
+	const DWORD retry_delay_ms = 500;
+
 	SOCKET fd = INVALID_SOCKET;
-	struct addrinfo *p;
-	for (p = res; p != NULL; p = p->ai_next) {
-		fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
-		if (fd == INVALID_SOCKET) continue;
-		if (connect(fd, p->ai_addr, (int)p->ai_addrlen) == 0) break;
-		closesocket(fd);
-		fd = INVALID_SOCKET;
-	}
+	do {
+		struct addrinfo *p;
+		for (p = res; p != NULL; p = p->ai_next) {
+			fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
+			if (fd == INVALID_SOCKET) continue;
+			if (connect(fd, p->ai_addr, (int)p->ai_addrlen) == 0) break;
+			closesocket(fd);
+			fd = INVALID_SOCKET;
+		}
+
+		if (fd != INVALID_SOCKET) break;
+
+		DWORD now = GetTickCount();
+		if (now >= deadline) break;
+
+		DWORD remaining = deadline - now;
+		DWORD sleep_ms = remaining < retry_delay_ms ? remaining : retry_delay_ms;
+		fprintf(stderr, "[transport] connect to %s:%u failed: %d - retrying in %ums\n",
+			host, (unsigned)port, WSAGetLastError(), (unsigned)sleep_ms);
+		Sleep(sleep_ms);
+
+	} while (GetTickCount() < deadline);
+
 	freeaddrinfo(res);
 
 	if (fd == INVALID_SOCKET) {
@@ -94,8 +112,6 @@ int ssh_tcp_connect(const char *host, uint16_t port)
 		return -1;
 	}
 
-	/* Cast SOCKET (UINT_PTR) to int — safe for passing around as fd
-	on 64-bit Windows as long as we cast back before Winsock calls. */
 	return (int)(intptr_t)fd;
 }
 
